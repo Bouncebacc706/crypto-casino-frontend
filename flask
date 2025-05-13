@@ -1,0 +1,41 @@
+from flask import Flask, request, jsonify from flask_sqlalchemy import SQLAlchemy from flask_cors import CORS from werkzeug.security import generate_password_hash, check_password_hash import jwt, datetime, random
+
+app = Flask(name) CORS(app) app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///luckyverse.db' app.config['SECRET_KEY'] = 'super-secret-key' db = SQLAlchemy(app)
+
+MODELS
+
+class User(db.Model): id = db.Column(db.Integer, primary_key=True) username = db.Column(db.String(80), unique=True, nullable=False) password = db.Column(db.String(200), nullable=False) balance = db.Column(db.Float, default=1000.0)
+
+class GameLog(db.Model): id = db.Column(db.Integer, primary_key=True) user_id = db.Column(db.Integer, db.ForeignKey('user.id')) game = db.Column(db.String(50)) result = db.Column(db.String(50)) amount = db.Column(db.Float) timestamp = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+ROUTES
+
+@app.route('/register', methods=['POST']) def register(): data = request.get_json() if User.query.filter_by(username=data['username']).first(): return jsonify({'message': 'User already exists'}), 409 hashed_pw = generate_password_hash(data['password']) new_user = User(username=data['username'], password=hashed_pw) db.session.add(new_user) db.session.commit() return jsonify({'message': 'Registered successfully'})
+
+@app.route('/login', methods=['POST']) def login(): data = request.get_json() user = User.query.filter_by(username=data['username']).first() if not user or not check_password_hash(user.password, data['password']): return jsonify({'message': 'Invalid credentials'}), 401 token = jwt.encode({ 'user_id': user.id, 'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24) }, app.config['SECRET_KEY'], algorithm='HS256') return jsonify({'token': token})
+
+@app.route('/flip', methods=['POST']) def coin_flip(): token = request.headers.get('Authorization').split()[1] try: payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256']) except jwt.ExpiredSignatureError: return jsonify({'message': 'Token expired'}), 401 user = User.query.get(payload['user_id'])
+
+data = request.get_json()
+bet = data['bet']
+choice = data['choice']  # 'heads' or 'tails'
+
+if user.balance < bet:
+    return jsonify({'message': 'Insufficient balance'}), 400
+
+outcome = random.choice(['heads', 'tails'])
+if outcome == choice:
+    user.balance += bet
+    result = 'win'
+else:
+    user.balance -= bet
+    result = 'lose'
+
+log = GameLog(user_id=user.id, game='coin_flip', result=result, amount=bet)
+db.session.add(log)
+db.session.commit()
+
+return jsonify({'outcome': outcome, 'result': result, 'balance': user.balance})
+
+if name == 'main': with app.app_context(): db.create_all() app.run(debug=True)
+
